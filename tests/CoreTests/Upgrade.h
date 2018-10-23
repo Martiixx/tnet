@@ -29,6 +29,7 @@ struct gen_upgrade : public test_chain_unit_base
   bool markInvalidBlock(CryptoNote::Core& c, size_t evIndex, const std::vector<test_event_entry>& events);
   bool checkBlockTemplateVersionIsV1(CryptoNote::Core& c, size_t evIndex, const std::vector<test_event_entry>& events);
   bool checkBlockTemplateVersionIsV2(CryptoNote::Core& c, size_t evIndex, const std::vector<test_event_entry>& events);
+  bool checkBlockTemplateVersionIsV4(CryptoNote::Core& c, size_t evIndex, const std::vector<test_event_entry>& events);
   bool checkBlockRewardEqFee(CryptoNote::Core& c, size_t evIndex, const std::vector<test_event_entry>& events);
   bool checkBlockRewardIsZero(CryptoNote::Core& c, size_t evIndex, const std::vector<test_event_entry>& events);
   bool rememberCoinsInCirculationBeforeUpgrade(CryptoNote::Core& c, size_t evIndex, const std::vector<test_event_entry>& events);
@@ -36,8 +37,10 @@ struct gen_upgrade : public test_chain_unit_base
 
 private:
   bool checkBeforeUpgrade(std::vector<test_event_entry>& events, test_generator& generator,
-                          const CryptoNote::BlockTemplate& parentBlock, const CryptoNote::AccountBase& minerAcc, bool checkReward) const;
+                         const CryptoNote::BlockTemplate& parentBlock, const CryptoNote::AccountBase& minerAcc, bool checkReward) const;
   bool checkAfterUpgrade(std::vector<test_event_entry>& events, test_generator& generator,
+                         const CryptoNote::BlockTemplate& parentBlock, const CryptoNote::AccountBase& minerAcc) const;
+  bool checkAfterUpgradeToV4(std::vector<test_event_entry>& events, test_generator& generator,
                          const CryptoNote::BlockTemplate& parentBlock, const CryptoNote::AccountBase& minerAcc) const;
   bool checkBlockTemplateVersion(CryptoNote::Core& c, uint8_t expectedMajorVersion, uint8_t expectedMinorVersion);
 
