@@ -120,7 +120,9 @@ bool Currency::generateGenesisBlock() {
 }
 
 size_t Currency::difficultyWindowByBlockVersion(uint8_t blockMajorVersion) const {
-  if (blockMajorVersion >= BLOCK_MAJOR_VERSION_3) {
+    if (blockMajorVersion >= BLOCK_MAJOR_VERSION_4) {
+        return CryptoNote::parameters::DIFFICULTY_WINDOW_V4
+    } else if (blockMajorVersion >= BLOCK_MAJOR_VERSION_3) {
     return m_difficultyWindow;
   } else if (blockMajorVersion == BLOCK_MAJOR_VERSION_2) {
     return CryptoNote::parameters::DIFFICULTY_WINDOW_V2;
@@ -149,9 +151,9 @@ size_t Currency::difficultyCutByBlockVersion(uint8_t blockMajorVersion) const {
   }
 }
 
-size_t Currency::difficultyBlocksCountByBlockVersion(uint8_t blockMajorVersion) const {
-    if (blockMajorVersion >= BLOCK_MAJOR_VERSION_4) {
-        return m_difficultyWindow_v4;
+size_t Currency::difficultyBlocksCountByBlockVersion(uint8_t blockMajorVersion, uint32_t height) const {
+    if (height >= CryptoNote::parameters::UPGRADE_HEIGHT_V4) {
+        return CryptoNote::parameters::DIFFICULTY_WINDOW_V4
     }
   return difficultyWindowByBlockVersion(blockMajorVersion) + difficultyLagByBlockVersion(blockMajorVersion);
 }
@@ -488,64 +490,57 @@ Difficulty Currency::nextDifficulty(std::vector<uint64_t> timestamps,
   return (low + timeSpan - 1) / timeSpan;
 }
 
-    Difficulty Currency::nextDifficultyLWMA(std::vector<uint64_t> timestamps, std::vector<Difficulty> cumulativeDifficulties) const {
-        /*
-        LWMA difficulty algorithm
-        Copyright (c) 2017-2018 Zawy
-        MIT license http://www.opensource.org/licenses/mit-license.php.
-        This is an improved version of Tom Harding's (Deger8) "WT-144"
-        Karbowanec, Masari, Bitcoin Gold, and Bitcoin Cash have contributed.
-        See https://github.com/zawy12/difficulty-algorithms/issues/1 for other algos.
-        Do not use "if solvetime < 0 then solvetime = 1" which allows a catastrophic exploit.
-        T= target_solvetime;
-        N = int(45 * (600 / T) ^ 0.3));
-        Karbowanec improved
-        */
-        const int64_t T = static_cast<int64_t>(m_difficultyTarget);
-        const size_t N = m_difficultyWindow_v4 - 1;
-        if (timestamps.size() > N + 1) {
-            timestamps.resize(N + 1);
-            cumulativeDifficulties.resize(N + 1);
-        }
-        size_t n = timestamps.size();
-        assert(n == cumulativeDifficulties.size());
-        assert(n <= m_difficultyWindow_v4);
-        if (n <= 2) return 1;
-        if (n < (N + 1)) return 100000;
-        // To get an average solvetime to within +/- ~0.1%, use an adjustment factor.
-        const double_t adjust = 0.998;
-        // The divisor k normalizes LWMA.
-        const double_t k = N * (N + 1) / 2;
-        double_t LWMA(0), sum_inverse_D(0), harmonic_mean_D(0), nextDifficulty(0);
-        int64_t solveTime(0);
-        uint64_t difficulty(0), next_difficulty(0);
-        // Loop through N most recent blocks.
-        for (int64_t i = 1; i <= (int64_t)N; i++) {
-            solveTime = static_cast<int64_t>(timestamps[i]) - static_cast<int64_t>(timestamps[i - 1]);
-            solveTime = std::min<int64_t>((T * 7), std::max<int64_t>(solveTime, (-6 * T)));
-            difficulty = cumulativeDifficulties[i] - cumulativeDifficulties[i - 1];
-            LWMA += solveTime * i / k;
-            sum_inverse_D += 1 / static_cast<double_t>(difficulty);
-        }
-        //std::cout << "N: " << j << std::endl;
-        // Keep LWMA reasonable in case a coin does not have appropriate limits on
-        // old timestamps (like bitcoin's MTP) which could cause LWMA to go negative.
-        // Keep LWMA sane in case something unforeseen occurs.
-        if (static_cast<int64_t>(std::round(LWMA)) < T / 20)
-            LWMA = static_cast<double_t>(T / 20);
 
-        harmonic_mean_D = N / sum_inverse_D * adjust;
-        nextDifficulty = harmonic_mean_D * T / LWMA;
-        next_difficulty = static_cast<uint64_t>(nextDifficulty);
+// LWMA-3 difficulty algorithm
+// Copyright (c) 2017-2018 Zawy, MIT License
+// https://github.com/zawy12/difficulty-algorithms/issues/3
+    Difficulty Currency::nextDifficultyLWMA(
+            uint32_t blockIndex,
+            std::vector<uint64_t> timestamps,
+            std::vector<Difficulty> cumulativeDifficulties) const {
 
-        if (next_difficulty < 100000) {
-            next_difficulty = 100000;
+      uint64_t T = CryptoNote::parameters::DIFFICULTY_TARGET;
+      uint64_t N = CryptoNote::parameters::DIFFICULTY_WINDOW_V4;
+      uint64_t L(0), ST, sum_3_ST(0), next_D, prev_D, thisTimestamp, previousTimestamp;
+      /* If we are starting up, returning a difficulty guess. If you are a
+         new coin, you might want to set this to a decent estimate of your
+         hashrate */
+      uint64_t difficulty_guess = isTestnet() ? 1000 : 500000;
+      if (timestamps.size() <= 10) {
+        return difficulty_guess;
+      }
+      /* Don't have the full amount of blocks yet, starting up */
+      if (timestamps.size() < CryptoNote::parameters::DIFFICULTY_WINDOW_V4 + 1) {
+        N = timestamps.size() - 1;
+      }
+      previousTimestamp = timestamps[0];
+      for (uint64_t i = 1; i <= N; i++) {
+        if (timestamps[i] > previousTimestamp) {
+          thisTimestamp = timestamps[i];
+        } else {
+          thisTimestamp = previousTimestamp + 1;
         }
-        return next_difficulty;
+        ST = std::min(6 * T, thisTimestamp - previousTimestamp);
+        previousTimestamp = thisTimestamp;
+        L +=  ST * i;
+        if (i > N-3) {
+          sum_3_ST += ST;
+        }
+      }
+      next_D = ((cumulativeDifficulties[N] - cumulativeDifficulties[0]) * T * (N+1) * 99) / (100 * 2 * L);
+      prev_D = cumulativeDifficulties[N] - cumulativeDifficulties[N-1];
+      next_D = std::max((prev_D * 67) / 100, std::min(next_D, (prev_D * 150) / 100));
+      if (sum_3_ST < (8 * T) / 10) {
+        next_D = std::max(next_D, (prev_D * 108) / 100);
+      }
+      return next_D;
     }
 
 Difficulty Currency::nextDifficulty(uint8_t version, uint32_t blockIndex, std::vector<uint64_t> timestamps,
   std::vector<Difficulty> cumulativeDifficulties) const {
+  if (blockIndex >= CryptoNote::parameters::UPGRADE_HEIGHT_V4) {
+    return nextDifficultyLWMA(blockIndex, timestamps, cumulativeDifficulties);
+  }
   if (m_zawyDifficultyBlockIndex && m_zawyDifficultyBlockIndex <= blockIndex && (m_zawyDifficultyLastBlock == 0 || m_zawyDifficultyLastBlock >= blockIndex)) {
     return nextDifficultyZawyV1(version, blockIndex, timestamps, cumulativeDifficulties);
 }
